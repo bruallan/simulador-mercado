@@ -35,24 +35,23 @@ def limpar_valor(valor):
             return 0.0
     return float(valor)
 
-# 3. Gerenciamento de Estado para Persistência
+# 3. Gerenciamento de Estado
 if 'produto_selecionado' not in st.session_state:
     st.session_state.produto_selecionado = None
 
-# 4. Seleção de Mercado e Carregamento de Dados
+# 4. Seleção de Mercado e Cabeçalho
 col_header1, col_header2 = st.columns(2)
 
 with col_header1:
     unidade_nome = st.selectbox("Selecione o Mercado:", list(config_unidades.keys()))
     info_unidade = config_unidades[unidade_nome]
     custo_op_percentual = info_unidade["custo_op"]
-    # Texto pequeno e cinza abaixo do mercado
     st.caption(f"*Custo Operacional de {custo_op_percentual*100:.0f}%")
 
 @st.cache_data(ttl=60)
 def carregar_dados(url):
     try:
-        # skiprows=2 para ignorar a linha de descrição e cabeçalhos
+        # skiprows=2 pula a linha 'DESCRIÇÃO...' e a linha de cabeçalho das colunas
         df = pd.read_csv(url, usecols=[2, 3, 4], names=["Produto", "Custo_Ultima", "Venda_Atual"], skiprows=2)
         return df
     except:
@@ -77,34 +76,34 @@ if df is not None:
 
     st.divider()
 
-    # Cálculo do Lucro Real Atual
+    # 5. Cálculos
     lucro_real_val = (venda_atual_real - (venda_atual_real * custo_op_percentual) - custo_ultima_real) / venda_atual_real if venda_atual_real > 0 else 0
 
-    # 5. Layout Simétrico
+    # 6. Layout Simétrico e Alinhado
     col_simulador, col_valores_reais = st.columns(2)
 
     # --- COLUNA: SIMULADOR ---
     with col_simulador:
         st.subheader("Simulador")
         
-        # Preço da Prateleira vindo preenchido com o Custo da Última
-        # A chave (key) inclui o nome do produto para resetar o valor ao trocar de item
+        # Preço da Prateleira (Auto-preenchido e com Step 1.0)
         preco_prateleira = st.number_input(
             "Preço da Prateleira (R$)", 
             min_value=0.0, 
             value=custo_ultima_real,
             step=1.0, 
             format="%.2f",
-            key=f"input_prat_{produto_escolhido}"
+            key=f"sim_prat_{produto_escolhido}"
         )
         
+        # Preço de Venda Simulado
         venda_simulada = st.number_input(
             "Preço de Venda Simulado (R$)", 
             min_value=0.0, 
             value=venda_atual_real, 
             step=1.0, 
             format="%.2f",
-            key=f"input_venda_{produto_escolhido}"
+            key=f"sim_venda_{produto_escolhido}"
         )
 
         if venda_simulada > 0:
@@ -124,12 +123,13 @@ if df is not None:
     with col_valores_reais:
         st.subheader("Valores Reais")
         
+        # Chaves dinâmicas f"real_..." garantem a atualização ao trocar o produto
         st.number_input(
             "Custo da Última Compra (R$)", 
             value=custo_ultima_real, 
             disabled=True, 
             format="%.2f",
-            key="view_custo_real"
+            key=f"real_custo_{produto_escolhido}"
         )
         
         st.number_input(
@@ -137,7 +137,7 @@ if df is not None:
             value=venda_atual_real, 
             disabled=True, 
             format="%.2f",
-            key="view_venda_real"
+            key=f"real_venda_{produto_escolhido}"
         )
         
         st.metric(
