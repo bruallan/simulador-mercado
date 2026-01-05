@@ -25,7 +25,7 @@ def limpar_valor(valor):
     if pd.isna(valor) or valor == "":
         return 0.0
     if isinstance(valor, str):
-        # Remove R$, espaços e ajusta separadores decimais
+        # Limpeza de caracteres não numéricos, mantendo o ponto decimal
         limpo = valor.replace("R$", "").strip()
         if "," in limpo and "." in limpo:
             limpo = limpo.replace(".", "").replace(",", ".")
@@ -45,18 +45,18 @@ with col_header1:
     unidade_nome = st.selectbox("Selecione o Mercado:", list(config_unidades.keys()))
     info_unidade = config_unidades[unidade_nome]
     custo_op_percentual = info_unidade["custo_op"]
-    st.caption(f"*Custo Operacional de {custo_op_percentual*100:.0f}%")
+    st.caption(f"*Custo Operacional aplicado: {custo_op_percentual*100:.0f}%")
 
 # 4. Carregamento de Dados
-@st.cache_data(ttl=60) # Aumentei um pouco o tempo para estabilidade
+@st.cache_data(ttl=60)
 def carregar_dados(url):
     try:
-        # skiprows=2 pula as linhas iniciais se necessário
+        # Lendo colunas específicas: Produto, Custo e Venda
         df = pd.read_csv(url, usecols=[2, 3, 4], names=["Produto", "Custo_Ultima", "Venda_Atual"], skiprows=2)
         df["Produto"] = df["Produto"].str.strip()
         return df
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+        st.error(f"Erro ao conectar com a planilha: {e}")
         return None
 
 df = carregar_dados(info_unidade["url"])
@@ -65,77 +65,87 @@ if df is not None:
     lista_produtos = sorted(df["Produto"].unique().tolist())
     
     with col_header2:
-        produto_escolhido = st.selectbox("Selecione o Produto:", lista_produtos, key="sb_produto")
+        produto_escolhido = st.selectbox("Selecione o Produto:", lista_produtos)
     
-    # Busca dos dados do produto selecionado
+    # Filtragem dos dados do produto selecionado
     dados_filtrados = df[df["Produto"] == produto_escolhido]
     
     if not dados_filtrados.empty:
         item = dados_filtrados.iloc[0]
-        custo_ultima_real = limpar_valor(item["Custo_Ultima"])
-        venda_atual_real = limpar_valor(item["Venda_Atual"])
+        custo_base = limpar_valor(item["Custo_Ultima"])
+        venda_base = limpar_valor(item["Venda_Atual"])
     else:
-        custo_ultima_real = 0.0
-        venda_atual_real = 0.0
+        custo_base = 0.0
+        venda_base = 0.0
 
     st.divider()
 
-    # Cálculo do Lucro Real Atual (Fórmula: (Venda - Impostos/Custos - Custo Produto) / Venda)
-    lucro_real_val = (venda_atual_real - (venda_atual_real * custo_op_percentual) - custo_ultima_real) / venda_atual_real if venda_atual_real > 0 else 0
+    # Cálculo do Lucro Real (vindo da planilha)
+    # Fórmula: (Venda - Impostos - Custo) / Venda
+    lucro_real_val = (venda_base - (venda_base * custo_op_percentual) - custo_base) / venda_base if venda_base > 0 else 0
 
-    # 5. Layout Simétrico
+    # 5. Layout das Colunas
     col_simulador, col_valores_reais = st.columns(2)
 
-    # --- COLUNA: SIMULADOR (ENTRADA) ---
+    # --- COLUNA: SIMULADOR (Onde o usuário mexe) ---
     with col_simulador:
-        st.subheader("Simulador")
+        st.subheader("💡 Simulador")
         
-        # Chave dinâmica para resetar quando mudar o produto
-        p_prateleira = st.number_input(
-            "Preço de Custo Simulado (R$)", 
+        # A chave dinâmica força o reset do valor quando mudar mercado ou produto
+        chave_sim = f"sim_{unidade_nome}_{produto_escolhido}"
+        
+        p_custo_sim = st.number_input(
+            "Custo Simulado (R$)", 
             min_value=0.0, 
-            value=custo_ultima_real,
+            value=custo_base,
             step=0.01, 
             format="%.2f",
-            key=f"input_custo_{unidade_nome}_{produto_escolhido}"
+            key=f"input_c_{chave_sim}"
         )
         
-        v_simulada = st.number_input(
-            "Preço de Venda Simulado (R$)", 
+        v_venda_sim = st.number_input(
+            "Venda Simulada (R$)", 
             min_value=0.0, 
-            value=venda_atual_real, 
+            value=venda_base, 
             step=0.01, 
             format="%.2f",
-            key=f"input_venda_{unidade_nome}_{produto_escolhido}"
+            key=f"input_v_{chave_sim}"
         )
 
-        lucro_sim_val = (v_simulada - (v_simulada * custo_op_percentual) - p_prateleira) / v_simulada if v_simulada > 0 else 0
+        # Cálculo da Margem Simulada
+        lucro_sim_val = (v_venda_sim - (v_venda_sim * custo_op_percentual) - p_custo_sim) / v_venda_sim if v_venda_sim > 0 else 0
         delta_val = (lucro_sim_val - lucro_real_val) * 100
         
-        st.metric(label="Margem de Lucro Simulada (%)", value=f"{lucro_sim_val * 100:.2f}%", delta=f"{delta_val:.2f}%")
+        st.metric(
+            label="Margem Simulada (%)", 
+            value=f"{lucro_sim_val * 100:.2f}%", 
+            delta=f"{delta_val:.2f}%"
+        )
 
-    # --- COLUNA: VALORES REAIS (BASE) ---
+    # --- COLUNA: VALORES REAIS (Baseados na Planilha - Travados) ---
     with col_valores_reais:
-        st.subheader("Valores Reais")
+        st.subheader("📋 Valores Reais (Base)")
         
-        # AQUI ESTÁ A CORREÇÃO: Adicionamos chaves únicas baseadas no produto e mercado
+        # Chave dinâmica também aqui para garantir a atualização visual
+        chave_real = f"real_{unidade_nome}_{produto_escolhido}"
+        
         st.number_input(
             "Custo da Última Compra (R$)", 
-            value=custo_ultima_real, 
+            value=custo_base, 
             disabled=True, 
             format="%.2f",
-            key=f"real_custo_{unidade_nome}_{produto_escolhido}"
+            key=f"real_c_{chave_real}"
         )
         
         st.number_input(
             "Preço de Venda Atual (R$)", 
-            value=venda_atual_real, 
+            value=venda_base, 
             disabled=True, 
             format="%.2f",
-            key=f"real_venda_{unidade_nome}_{produto_escolhido}"
+            key=f"real_v_{chave_real}"
         )
         
-        st.metric(label="Lucro Real Atual (%)", value=f"{lucro_real_val * 100:.2f}%")
+        st.metric(label="Margem Real Atual (%)", value=f"{lucro_real_val * 100:.2f}%")
 
 else:
-    st.error("Não foi possível carregar a planilha. Verifique a conexão ou os links.")
+    st.error("Não foi possível carregar os dados. Verifique os links das planilhas.")
