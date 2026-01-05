@@ -35,11 +35,7 @@ def limpar_valor(valor):
             return 0.0
     return float(valor)
 
-# 3. Gerenciamento de Estado para Persistência
-if 'produto_selecionado' not in st.session_state:
-    st.session_state.produto_selecionado = None
-
-# 4. Seleção de Mercado e Carregamento de Dados
+# 3. Seleção de Mercado
 col_header1, col_header2 = st.columns(2)
 
 with col_header1:
@@ -48,11 +44,14 @@ with col_header1:
     custo_op_percentual = info_unidade["custo_op"]
     st.caption(f"*Custo Operacional de {custo_op_percentual*100:.0f}%")
 
-@st.cache_data(ttl=30) # Reduzi o cache para 30 segundos para maior precisão
+# 4. Carregamento de Dados (Cache ultra curto para evitar travamentos)
+@st.cache_data(ttl=5)
 def carregar_dados(url):
     try:
-        # skiprows=2 para ignorar as linhas de descrição/título do sistema
+        # skiprows=2 pula a linha de descrição e a linha de cabeçalho
         df = pd.read_csv(url, usecols=[2, 3, 4], names=["Produto", "Custo_Ultima", "Venda_Atual"], skiprows=2)
+        # Limpa espaços em branco nos nomes dos produtos
+        df["Produto"] = df["Produto"].str.strip()
         return df
     except:
         return None
@@ -60,91 +59,79 @@ def carregar_dados(url):
 df = carregar_dados(info_unidade["url"])
 
 if df is not None:
-    lista_produtos = df["Produto"].unique().tolist()
-    
-    # Tenta manter o produto selecionado ao trocar de mercado
-    index_atual = 0
-    if st.session_state.produto_selecionado in lista_produtos:
-        index_atual = lista_produtos.index(st.session_state.produto_selecionado)
+    lista_produtos = sorted(df["Produto"].unique().tolist())
     
     with col_header2:
-        produto_escolhido = st.selectbox("Selecione o Produto:", lista_produtos, index=index_atual)
-        st.session_state.produto_selecionado = produto_escolhido
+        # Usamos uma key no selectbox para o Streamlit rastrear a mudança de produto
+        produto_escolhido = st.selectbox("Selecione o Produto:", lista_produtos, key="sb_produto")
     
-    # Extração de dados REAIS da planilha (sempre atualizados por produto/mercado)
-    dados = df[df["Produto"] == produto_escolhido].iloc[0]
-    custo_ultima_real = limpar_valor(dados["Custo_Ultima"])
-    venda_atual_real = limpar_valor(dados["Venda_Atual"])
+    # BUSCA DINÂMICA: Extraímos os dados do produto NO MOMENTO da execução
+    dados_filtrados = df[df["Produto"] == produto_escolhido]
+    
+    if not dados_filtrados.empty:
+        item = dados_filtrados.iloc[0]
+        custo_ultima_real = limpar_valor(item["Custo_Ultima"])
+        venda_atual_real = limpar_valor(item["Venda_Atual"])
+    else:
+        custo_ultima_real = 0.0
+        venda_atual_real = 0.0
 
     st.divider()
 
     # Cálculo do Lucro Real Atual
     lucro_real_val = (venda_atual_real - (venda_atual_real * custo_op_percentual) - custo_ultima_real) / venda_atual_real if venda_atual_real > 0 else 0
 
-    # 5. Layout Simétrico em Duas Colunas
+    # 5. Layout Simétrico
     col_simulador, col_valores_reais = st.columns(2)
 
-    # --- COLUNA: SIMULADOR (Entrada) ---
+    # --- COLUNA: SIMULADOR (ENTRADA) ---
     with col_simulador:
         st.subheader("Simulador")
         
-        # Preço da Prateleira vindo preenchido com o Custo Real
-        preco_prateleira = st.number_input(
+        # Key dinâmica para resetar o valor quando o produto muda
+        p_prateleira = st.number_input(
             "Preço da Prateleira (R$)", 
             min_value=0.0, 
             value=custo_ultima_real,
             step=1.0, 
             format="%.2f",
-            key=f"input_prat_{unidade_nome}_{produto_escolhido}"
+            key=f"sim_prat_{unidade_nome}_{produto_escolhido}"
         )
         
-        venda_simulada = st.number_input(
+        v_simulada = st.number_input(
             "Preço de Venda Simulado (R$)", 
             min_value=0.0, 
             value=venda_atual_real, 
             step=1.0, 
             format="%.2f",
-            key=f"input_venda_{unidade_nome}_{produto_escolhido}"
+            key=f"sim_venda_{unidade_nome}_{produto_escolhido}"
         )
 
-        if venda_simulada > 0:
-            lucro_simulado_val = (venda_simulada - (venda_simulada * custo_op_percentual) - preco_prateleira) / venda_simulada
-        else:
-            lucro_simulado_val = 0.0
-
-        delta_val = (lucro_simulado_val - lucro_real_val) * 100
+        lucro_sim_val = (v_simulada - (v_simulada * custo_op_percentual) - p_prateleira) / v_simulada if v_simulada > 0 else 0
+        delta_val = (lucro_sim_val - lucro_real_val) * 100
         
-        st.metric(
-            label="Margem de Lucro Simulada (%)", 
-            value=f"{lucro_simulado_val * 100:.2f}%", 
-            delta=f"{delta_val:.2f}%"
-        )
+        st.metric(label="Margem de Lucro Simulada (%)", value=f"{lucro_sim_val * 100:.2f}%", delta=f"{delta_val:.2f}%")
 
-    # --- COLUNA: VALORES REAIS (Base) ---
+    # --- COLUNA: VALORES REAIS (BASE) ---
     with col_valores_reais:
         st.subheader("Valores Reais")
         
-        # CHAVES ÚNICAS POR PRODUTO E MERCADO PARA FORÇAR A ATUALIZAÇÃO
+        # IMPORTANTE: Sem 'key' para forçar a atualização do 'value' a cada renderização
         st.number_input(
             "Custo da Última Compra (R$)", 
             value=custo_ultima_real, 
             disabled=True, 
-            format="%.2f",
-            key=f"real_c_{unidade_nome}_{produto_escolhido}"
+            format="%.2f"
         )
         
         st.number_input(
             "Preço de Venda Atual (R$)", 
             value=venda_atual_real, 
             disabled=True, 
-            format="%.2f",
-            key=f"real_v_{unidade_nome}_{produto_escolhido}"
+            format="%.2f"
         )
         
-        st.metric(
-            label="Lucro Real Atual (%)", 
-            value=f"{lucro_real_val * 100:.2f}%"
-        )
+        st.metric(label="Lucro Real Atual (%)", value=f"{lucro_real_val * 100:.2f}%")
 
 else:
-    st.error("Erro ao carregar a planilha. Verifique a conexão.")
+    st.error("Não foi possível carregar a planilha. Verifique a conexão ou os links.")
