@@ -25,9 +25,12 @@ def limpar_valor(valor):
     if pd.isna(valor) or valor == "":
         return 0.0
     if isinstance(valor, str):
+        # Remove R$, espaços e ajusta separadores decimais
         limpo = valor.replace("R$", "").strip()
-        if "," in limpo:
+        if "," in limpo and "." in limpo:
             limpo = limpo.replace(".", "").replace(",", ".")
+        elif "," in limpo:
+            limpo = limpo.replace(",", ".")
         limpo = re.sub(r'[^0-9.-]', '', limpo)
         try:
             return float(limpo)
@@ -44,16 +47,16 @@ with col_header1:
     custo_op_percentual = info_unidade["custo_op"]
     st.caption(f"*Custo Operacional de {custo_op_percentual*100:.0f}%")
 
-# 4. Carregamento de Dados (Cache ultra curto para evitar travamentos)
-@st.cache_data(ttl=5)
+# 4. Carregamento de Dados
+@st.cache_data(ttl=60) # Aumentei um pouco o tempo para estabilidade
 def carregar_dados(url):
     try:
-        # skiprows=2 pula a linha de descrição e a linha de cabeçalho
+        # skiprows=2 pula as linhas iniciais se necessário
         df = pd.read_csv(url, usecols=[2, 3, 4], names=["Produto", "Custo_Ultima", "Venda_Atual"], skiprows=2)
-        # Limpa espaços em branco nos nomes dos produtos
         df["Produto"] = df["Produto"].str.strip()
         return df
-    except:
+    except Exception as e:
+        st.error(f"Erro ao carregar dados: {e}")
         return None
 
 df = carregar_dados(info_unidade["url"])
@@ -62,10 +65,9 @@ if df is not None:
     lista_produtos = sorted(df["Produto"].unique().tolist())
     
     with col_header2:
-        # Usamos uma key no selectbox para o Streamlit rastrear a mudança de produto
         produto_escolhido = st.selectbox("Selecione o Produto:", lista_produtos, key="sb_produto")
     
-    # BUSCA DINÂMICA: Extraímos os dados do produto NO MOMENTO da execução
+    # Busca dos dados do produto selecionado
     dados_filtrados = df[df["Produto"] == produto_escolhido]
     
     if not dados_filtrados.empty:
@@ -78,7 +80,7 @@ if df is not None:
 
     st.divider()
 
-    # Cálculo do Lucro Real Atual
+    # Cálculo do Lucro Real Atual (Fórmula: (Venda - Impostos/Custos - Custo Produto) / Venda)
     lucro_real_val = (venda_atual_real - (venda_atual_real * custo_op_percentual) - custo_ultima_real) / venda_atual_real if venda_atual_real > 0 else 0
 
     # 5. Layout Simétrico
@@ -88,23 +90,23 @@ if df is not None:
     with col_simulador:
         st.subheader("Simulador")
         
-        # Key dinâmica para resetar o valor quando o produto muda
+        # Chave dinâmica para resetar quando mudar o produto
         p_prateleira = st.number_input(
-            "Preço da Prateleira (R$)", 
+            "Preço de Custo Simulado (R$)", 
             min_value=0.0, 
             value=custo_ultima_real,
-            step=1.0, 
+            step=0.01, 
             format="%.2f",
-            key=f"sim_prat_{unidade_nome}_{produto_escolhido}"
+            key=f"input_custo_{unidade_nome}_{produto_escolhido}"
         )
         
         v_simulada = st.number_input(
             "Preço de Venda Simulado (R$)", 
             min_value=0.0, 
             value=venda_atual_real, 
-            step=1.0, 
+            step=0.01, 
             format="%.2f",
-            key=f"sim_venda_{unidade_nome}_{produto_escolhido}"
+            key=f"input_venda_{unidade_nome}_{produto_escolhido}"
         )
 
         lucro_sim_val = (v_simulada - (v_simulada * custo_op_percentual) - p_prateleira) / v_simulada if v_simulada > 0 else 0
@@ -116,19 +118,21 @@ if df is not None:
     with col_valores_reais:
         st.subheader("Valores Reais")
         
-        # IMPORTANTE: Sem 'key' para forçar a atualização do 'value' a cada renderização
+        # AQUI ESTÁ A CORREÇÃO: Adicionamos chaves únicas baseadas no produto e mercado
         st.number_input(
             "Custo da Última Compra (R$)", 
             value=custo_ultima_real, 
             disabled=True, 
-            format="%.2f"
+            format="%.2f",
+            key=f"real_custo_{unidade_nome}_{produto_escolhido}"
         )
         
         st.number_input(
             "Preço de Venda Atual (R$)", 
             value=venda_atual_real, 
             disabled=True, 
-            format="%.2f"
+            format="%.2f",
+            key=f"real_venda_{unidade_nome}_{produto_escolhido}"
         )
         
         st.metric(label="Lucro Real Atual (%)", value=f"{lucro_real_val * 100:.2f}%")
